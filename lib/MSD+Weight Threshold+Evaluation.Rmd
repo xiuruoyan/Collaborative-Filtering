@@ -1,0 +1,178 @@
+---
+title: "MSD + Threshold + Evaluation"
+author: "Lan Wen (lw2773)"
+output: pdf_document
+---
+
+```{r}
+# Similarity Weight: mean-squared-difference function
+
+MSD_Weight <- function(data_mat){
+  nuser <- nrow(data_mat)
+  users <- rownames(data_mat)
+  diff_mat <- matrix(NA,nrow=nuser,ncol=nuser)
+  colnames(diff_mat) <- users
+  rownames(diff_mat) <- users
+  for (i in 1:nuser){
+    for (j in 1:nuser){
+      ri <- data_mat[i,]
+      rj <- data_mat[j,]
+      index <- (!is.na(ri))&(!is.na(rj))
+      if(sum(index)==0){diff_mat[i,j] <- 0}
+      else{
+        ri_new <- data_mat[i,index]
+        rj_new <- data_mat[j,index]
+        diff_mat[i,j] <- mean((ri_new-rj_new)^2)
+      }
+    }
+  }
+  L <- max(diff_mat)
+  weight_mat <- (L-diff_mat)/L
+  return(weight_mat)
+}
+```
+
+```{r}
+# Selecting Neighborhoods: weight threshold function
+
+corr_thresh <- function(mat, threshold){
+  diag(mat) <- 0
+  select_neighbor <- list()
+  for (i in 1:nrow(mat)){
+    select_neighbor[[i]] <- which(abs(mat[i,]) > threshold)
+  }
+  return(select_neighbor)
+}
+```
+
+```{r}
+# Prediction for Dataset 1: compute weighted average of z-scores
+
+avg_dev_pred_1 <- function(train_data, test_data, pearson_correlation, selected_neighbors){
+  
+  pred.matrix <- matrix(NA, nrow = nrow(train_data), ncol = ncol(train_data))
+  avg_rate_a <- apply(train_data, 1, mean)
+  train_data[is.na(train_data)] <- 0
+  test_data[is.na(test_data)] <- 0
+  
+  for (a in 1:nrow(train_data)){
+    rate_u <- train_data[selected_neighbors[[a]],]
+    #avg_rate_u <- apply(data[selected_neighbors[[a]],], 1, mean)
+    weight_u <- pearson_correlation[a,selected_neighbors[[a]]]
+    if (length(selected_neighbors[[a]]) == 0) {
+      pred.matrix[a,] = avg_rate_a[a]
+    } else if (length(selected_neighbors[[a]]) == 1) {
+      pred.matrix[a,] = avg_rate_a[a] + (rate_u-avg_rate_a[selected_neighbors[[a]]])*weight_u / sum(weight_u)
+    } else {
+      pred.matrix[a, ] <- avg_rate_a[a]+apply((rate_u-avg_rate_a[selected_neighbors[[a]]])*weight_u,2,sum)/sum(weight_u)
+    }
+  }
+  colnames(pred.matrix) = colnames(train_data)
+  rownames(pred.matrix) = rownames(train_data)
+  return(pred.matrix[rownames(train_data) %in% rownames(test_data), 
+                     colnames(train_data) %in% colnames(test_data)])
+}
+```
+
+```{r}
+# Prediction for Dataset 2: compute weighted average of z-scores
+
+avg_dev_pred_2 <- function(train_data, test_data, pearson_correlation, selected_neighbors){
+  pred.matrix <- matrix(NA, nrow = nrow(test_data), ncol = ncol(test_data))
+  avg_rate_a <- apply(train_data, 1, mean, na.rm = TRUE)
+  
+  for (a in 1:nrow(train_data)){
+    weight_u <- pearson_correlation[a,selected_neighbors[[a]]]
+    rate_u <- train_data[selected_neighbors[[a]],colnames(test_data)[which(!is.na(test_data[a,]))]]
+    if (length(selected_neighbors[[a]]) == 0) {
+      pred.matrix[a,!is.na(test_data)[a,]] <- avg_rate_a[a]
+    } else if (length(selected_neighbors[[a]]) == 1) {
+      pred.matrix[a,!is.na(test_data)[a,]] = avg_rate_a[a] + (rate_u-avg_rate_a[selected_neighbors[[a]]])*weight_u / sum(weight_u)
+    } else {
+      pred.matrix[a,!is.na(test_data)[a,]] <- avg_rate_a[a]+apply((rate_u-avg_rate_a[selected_neighbors[[a]]])*weight_u,2,sum, na.rm = TRUE)/sum(weight_u,na.rm = TRUE)
+    }
+  }
+
+  return(pred.matrix)
+}
+```
+
+```{r}
+# Evaluation 1: ranked scoring function
+
+Rank_Score <- function(pred, true, d = 0.02, alpha = 5){
+  rank_mat_pred <- ncol(pred)+1-t(apply(pred,1,function(x){return(rank(x,ties.method = 'first'))}))
+  rank_mat_true <- ncol(true)+1-t(apply(true,1,function(x){return(rank(x,ties.method = 'first'))}))
+  
+  v_true <- ifelse(true-d >0 & is.na(true-d) == F, true-d, 0)
+  R_a <- apply(1/(2^((rank_mat_pred-1)/(alpha-1)))*v_true,1,sum)
+  R_a_max <- apply(1/(2^((rank_mat_true-1)/(alpha-1)))*v_true,1,sum)
+  R <- 100*sum(R_a)/sum(R_a_max)
+  return(R)
+}
+```
+
+```{r}
+# Evaluation 2: mean absolute error (MAE) function
+
+MAE <- function(pred, true){
+  mae <- mean(abs(pred-true), na.rm = T)
+  return(mae)
+}
+```
+
+```{r}
+# Implementation on Dataset 1: mean-squared-difference + weight threshold + ranked scoring
+
+load("../output/MS_train.RData")
+load("../output/MS_test.RData")
+
+#MSD_w_1 <- MSD_Weight(MS_train)
+load("../output/MSD+Best-NN Result/MSD_Data1.RData")
+
+WT_11 <- corr_thresh(MSD_w_1, 0.05)
+WT_12 <- corr_thresh(MSD_w_1, 0.2)
+  
+ZScore_mat_11 <- avg_dev_pred_1(MS_train, MS_test, MSD_w_1, WT_11)
+ZScore_mat_12 <- avg_dev_pred_1(MS_train, MS_test, MSD_w_1, WT_12)
+
+RS_1 <- Rank_Score(ZScore_mat_11, MS_test)
+RS_2 <- Rank_Score(ZScore_mat_12, MS_test)
+
+RS_1
+RS_2
+
+save(MSD_w_1, file = "../output/MSD+Threshold Result/MSD_Data1.RData")
+save(WT_11, file = "../output/MSD+Threshold Result/WT_1_Data1.RData")
+save(WT_12, file = "../output/MSD+Threshold Result/WT_2_Data1.RData")
+save(ZScore_mat_11, file = "../output/MSD+Threshold Result/ZScore1_Data1.RData")
+save(ZScore_mat_12, file = "../output/MSD+Threshold Result/ZScore2_Data1.RData")
+```
+
+```{r}
+# Implementation on Dataset 2: mean-squared-difference + weight threshold + MAE
+
+load("../output/movie_train.RData")
+load("../output/movie_test.RData")
+
+#MSD_w_2 <- MSD_Weight(movie_train)
+load("../output/MSD+Best-NN Result/MSD_Data2.RData")
+
+WT_21 <- corr_thresh(MSD_w_2, 0.05)
+WT_22 <- corr_thresh(MSD_w_2, 0.2)
+
+ZScore_mat_21 <- avg_dev_pred_2(movie_train, movie_test, MSD_w_2, WT_21)
+ZScore_mat_22 <- avg_dev_pred_2(movie_train, movie_test, MSD_w_2, WT_22)
+
+MAE1 <- MAE(ZScore_mat_21, movie_test)
+MAE2 <- MAE(ZScore_mat_22, movie_test)
+
+MAE1
+MAE2
+
+save(MSD_w_2, file = "../output/MSD+Threshold Result/MSD_Data2.RData")
+save(WT_21, file = "../output/MSD+Threshold Result/WT_1_Data2.RData")
+save(WT_22, file = "../output/MSD+Threshold Result/WT_2_Data2.RData")
+save(ZScore_mat_21, file = "../output/MSD+Threshold Result/ZScore1_Data2.RData")
+save(ZScore_mat_22, file = "../output/MSD+Threshold Result/ZScore2_Data2.RData")
+```

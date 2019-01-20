@@ -1,0 +1,169 @@
+---
+title: "MSD + Best-NN + Evaluation"
+author: "Lan Wen (lw2773)"
+output: pdf_document
+---
+
+```{r}
+# Similarity Weight: mean-squared-difference function
+
+MSD_Weight <- function(data_mat){
+  nuser <- nrow(data_mat)
+  users <- rownames(data_mat)
+  diff_mat <- matrix(NA,nrow=nuser,ncol=nuser)
+  colnames(diff_mat) <- users
+  rownames(diff_mat) <- users
+  for (i in 1:nuser){
+    for (j in 1:nuser){
+      ri <- data_mat[i,]
+      rj <- data_mat[j,]
+      index <- (!is.na(ri))&(!is.na(rj))
+      if(sum(index)==0){diff_mat[i,j] <- 0}
+      else{
+        ri_new <- data_mat[i,index]
+        rj_new <- data_mat[j,index]
+        diff_mat[i,j] <- mean((ri_new-rj_new)^2)
+      }
+    }
+  }
+  L <- max(diff_mat)
+  weight_mat <- (L-diff_mat)/L
+  return(weight_mat)
+}
+```
+
+
+```{r}
+# Selecting Neighborhoods: best-n neighbors function
+
+Select_BNN <- function(weight_mat, nnbors){
+  nuser <- nrow(weight_mat)
+  users <- rownames(weight_mat)
+  nbor_mat <- matrix(NA, nrow = nuser, ncol = nnbors)
+  rownames(nbor_mat) <- users
+  
+  for (i in 1:nuser){
+    nbor_mat[i,] <- colnames(weight_mat)[order(weight_mat[i,],decreasing=T)][2:(nnbors+1)]
+  }
+  return(nbor_mat)
+}
+```
+
+
+```{r}
+# Prediction: compute weighted average of z-scores
+
+ZScore <- function(weight_mat, nbor_mat, data_mat, user, content){
+  neighbors <- nbor_mat[user,]
+  numer <- rep(NA, length(neighbors))
+  for (u in 1:length(neighbors)){
+    nbor <- neighbors[u]
+    r_ui <- data_mat[nbor, content]
+    r_u <- mean(data_mat[nbor,], na.rm = T)
+    sd_u <- sd(data_mat[nbor,], na.rm = T)
+    w_au <- weight_mat[user, nbor]
+    num <- (r_ui - r_u)/sd_u * w_au
+    if (is.na(num) == FALSE){numer[u] <- (r_ui - r_u)/sd_u * w_au}
+    else{numer[u] <- 0}
+  }
+  r_a <- mean(data_mat[user,], na.rm = T)
+  sd_a <- sd(data_mat[user,], na.rm = T)
+  w_a <- sum(weight_mat[user, neighbors])
+  p_ai <- r_a + sd_a * sum(numer)/w_a
+  
+  return(p_ai)
+}
+
+
+ZScore_Mat <- function(weight_mat, nbor_mat, train_data, test_data){
+  r <- nrow(test_data)
+  c <- ncol(test_data)
+  users <- rownames(test_data)
+  contents <- colnames(test_data)
+  ZScore_mat <- matrix(NA, r, c)
+  for (i in 1:r){
+    for (j in 1:c){
+      if (is.na(test_data[i,j]) == F){
+        ZScore_mat[i,j] <- ZScore(weight_mat, nbor_mat, train_data, users[i], contents[j])
+      }
+    }
+  }
+  return (ZScore_mat)
+}
+```
+
+
+```{r}
+# Evaluation 1: ranked scoring function
+
+Rank_Score <- function(pred, true, d = 0.02, alpha = 5){
+  rank_mat_pred <- ncol(pred)+1-t(apply(pred,1,function(x){return(rank(x,ties.method = 'first'))}))
+  rank_mat_true <- ncol(true)+1-t(apply(true,1,function(x){return(rank(x,ties.method = 'first'))}))
+  
+  v_true <- ifelse(true-d >0 & is.na(true-d) == F, true-d, 0)
+  R_a <- apply(1/(2^((rank_mat_pred-1)/(alpha-1)))*v_true,1,sum)
+  R_a_max <- apply(1/(2^((rank_mat_true-1)/(alpha-1)))*v_true,1,sum)
+  R <- 100*sum(R_a)/sum(R_a_max)
+  return(R)
+}
+```
+
+
+```{r}
+# Evaluation 2: mean absolute error (MAE) function
+
+MAE <- function(pred, true){
+  mae <- mean(abs(pred-true), na.rm = T)
+  return(mae)
+}
+```
+
+
+```{r}
+# Implementation on Dataset 1: mean-squared-difference + best-n neighbors + ranked scoring
+
+load("../output/MS_train.RData")
+load("../output/MS_test.RData")
+
+MSD_w_1 <- MSD_Weight(MS_train)
+BNN_11 <- Select_BNN(MSD_w_1, 20)
+BNN_12 <- Select_BNN(MSD_w_1, 40)
+ZScore_mat_11 <- ZScore_Mat(MSD_w_1, BNN_11, MS_train, MS_test)
+ZScore_mat_12 <- ZScore_Mat(MSD_w_1, BNN_12, MS_train, MS_test)
+RS_1 <- Rank_Score(ZScore_mat_11, MS_test)
+RS_2 <- Rank_Score(ZScore_mat_12, MS_test)
+
+RS_1
+RS_2
+
+save(MSD_w_1, file = "../output/MSD+Best-NN Result/MSD_Data1.RData")
+save(BNN_11, file = "../output/MSD+Best-NN Result/BNN1_Data1.RData")
+save(BNN_12, file = "../output/MSD+Best-NN Result/BNN2_Data1.RData")
+save(ZScore_mat_11, file = "../output/MSD+Best-NN Result/ZScore1_Data1.RData")
+save(ZScore_mat_12, file = "../output/MSD+Best-NN Result/ZScore2_Data1.RData")
+```
+
+
+```{r}
+# Implementation on Dataset 2: mean-squared-difference + best-n neighbors + MAE
+
+load("../output/movie_train.RData")
+load("../output/movie_test.RData")
+
+MSD_w_2 <- MSD_Weight(movie_train)
+BNN_21 <- Select_BNN(MSD_w_2, 20)
+BNN_22 <- Select_BNN(MSD_w_2, 40)
+ZScore_mat_21 <- ZScore_Mat(MSD_w_2, BNN_21, movie_train, movie_test)
+ZScore_mat_22 <- ZScore_Mat(MSD_w_2, BNN_22, movie_train, movie_test)
+MAE1 <- MAE(ZScore_mat_21, movie_test)
+MAE2 <- MAE(ZScore_mat_22, movie_test)
+
+MAE1
+MAE2
+
+save(MSD_w_2, file = "../output/MSD+Best-NN Result/MSD_Data2.RData")
+save(BNN_21, file = "../output/MSD+Best-NN Result/BNN1_Data2.RData")
+save(BNN_22, file = "../output/MSD+Best-NN Result/BNN2_Data2.RData")
+save(ZScore_mat_21, file = "../output/MSD+Best-NN Result/ZScore1_Data2.RData")
+save(ZScore_mat_22, file = "../output/MSD+Best-NN Result/ZScore2_Data2.RData")
+```
